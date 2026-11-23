@@ -2,11 +2,14 @@
 
 **Field Text** is an offline-first amateur-radio messaging web-app prototype.
 
-## Current prototype (v0.2)
+## Current prototype (v0.3)
 
 - Responsive mobile-friendly interface
+- Passwordless callsign login, remembered locally
+- Log out / change callsign
 - Callsign setting saved locally
 - Local demo inbox and conversations
+- Delete individual messages or entire conversations with confirmation
 - Compose/send simulated messages
 - Quick message presets and custom presets
 - Frequency Guide for HF, VHF, UHF, and SHF

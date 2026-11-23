@@ -4,7 +4,8 @@
   const main = $("#main");
   const storageKey = "fieldtext.v02";
   const defaultState = {
-    callsign: "N0CALL",
+    callsign: "",
+    loggedIn: false,
     quick: ["I am OK.","Need assistance.","At my location.","Returning to base.","Message received.","Radio check.","Battery low.","Will call again shortly."],
     chats: [
       {id:"demo-w4xyz", call:"W4XYZ", msgs:[
@@ -78,7 +79,25 @@
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
+  function renderLogin(){
+    const screen=$("#loginScreen");
+    if(state.loggedIn){screen.classList.add("hidden");return;}
+    screen.classList.remove("hidden");
+    screen.innerHTML=`<div class="login-panel"><div class="login-brand"><span>▰</span> FIELD TEXT</div><div class="tagline">OFF-GRID DIGITAL MESSAGING</div><h2>Welcome to Field Text</h2><p>Enter your amateur radio callsign to get started. No password or account required. Your callsign and local messages will be remembered on this device.</p><label for="loginCallsign">Callsign</label><input id="loginCallsign" maxlength="16" autocomplete="nickname" placeholder="e.g. KF5WZD" value="${escapeHtml(state.callsign||"")}"><button class="primary" id="loginContinue">Continue</button><div class="tiny" style="margin-top:13px">Passwordless · Stored locally on this device</div></div>`;
+    const input=$("#loginCallsign");
+    $("#loginContinue").onclick=login;
+    input.addEventListener("keydown",e=>{if(e.key==="Enter")login();});
+    input.focus();
+  }
+  function login(){
+    const value=$("#loginCallsign")?.value.trim().toUpperCase();
+    if(!value){alert("Enter your callsign to continue.");return;}
+    state.callsign=value;state.loggedIn=true;saveState();render();setStatus("READY · DEMO MODE");
+  }
   function render(){
+    renderLogin();
+    if(!state.loggedIn){$("#appShell").classList.add("hidden");return;}
+    $("#appShell").classList.remove("hidden");
     $("#headerCallsign").textContent=state.callsign;
     nav();
     if(page==="messages") renderMessages();
@@ -90,26 +109,41 @@
     if(selectedChat){
       const chat=state.chats.find(c=>c.id===selectedChat);
       if(!chat){selectedChat=null;return renderMessages();}
-      main.innerHTML=`<button class="ghost small" id="backInbox">← Inbox</button><h2 style="margin-top:13px">Conversation · ${escapeHtml(chat.call)}</h2><div id="chatLog"></div><label for="reply">Message</label><textarea id="reply" maxlength="170" placeholder="Type a message…"></textarea><div class="tiny" id="replyCount">0 / 170 characters</div><button class="primary" id="sendReply" style="width:100%;margin-top:10px">Transmit Message</button>`;
+      main.innerHTML=`<button class="ghost small" id="backInbox">← Inbox</button><h2 style="margin-top:13px">Conversation · ${escapeHtml(chat.call)}</h2><div class="conversation-actions"><button class="delete-btn small" id="clearConversation">Delete Conversation</button></div><div id="chatLog"></div><label for="reply">Message</label><textarea id="reply" maxlength="170" placeholder="Type a message…"></textarea><div class="tiny" id="replyCount">0 / 170 characters</div><button class="primary" id="sendReply" style="width:100%;margin-top:10px">Transmit Message</button>`;
       $("#backInbox").onclick=()=>{selectedChat=null;render();};
       const log=$("#chatLog");
-      chat.msgs.forEach(m=>appendMessage(log,m));
+      chat.msgs.forEach((m,index)=>appendMessage(log,m,index,chat));
+      $("#clearConversation").onclick=()=>{
+        if(confirm(`Delete the entire conversation with ${chat.call}? This cannot be undone.`)){
+          state.chats=state.chats.filter(c=>c.id!==chat.id);saveState();selectedChat=null;render();
+        }
+      };
       $("#reply").oninput=e=>$("#replyCount").textContent=`${e.target.value.length} / 170 characters`;
       $("#sendReply").onclick=()=>sendToChat(chat,$("#reply").value);
       return;
     }
     main.innerHTML=`<h2>Messages</h2><button class="primary compose-button" id="newMessage">＋ Compose Message</button>${state.chats.length?state.chats.map(c=>{
       const last=c.msgs[c.msgs.length-1];
-      return `<article class="card clickable" data-chat="${escapeHtml(c.id)}"><div class="flex"><span class="call">${escapeHtml(c.call)}</span><span class="tiny">${escapeHtml(last?.time||"")}</span></div><div class="preview">${escapeHtml(last?.text||"No messages yet")}</div></article>`;
+      return `<article class="card" data-card="${escapeHtml(c.id)}"><div class="flex"><button class="ghost" data-open="${escapeHtml(c.id)}" style="text-align:left;flex:1"><span class="call">${escapeHtml(c.call)}</span><span class="tiny" style="float:right">${escapeHtml(last?.time||"")}</span><div class="preview">${escapeHtml(last?.text||"No messages yet")}</div></button><button class="delete-btn small" data-delete-chat="${escapeHtml(c.id)}" title="Delete conversation">Delete</button></div></article>`;
     }).join(""):`<div class="empty">No conversations yet.<br>Compose a message to start.</div>`}<div class="tiny" style="margin-top:12px">Demo conversations are included. Your messages and callsign save locally on this device.</div>`;
     $("#newMessage").onclick=compose;
-    main.querySelectorAll("[data-chat]").forEach(el=>el.onclick=()=>{selectedChat=el.dataset.chat;render();});
+    main.querySelectorAll("[data-open]").forEach(el=>el.onclick=()=>{selectedChat=el.dataset.open;render();});
+    main.querySelectorAll("[data-delete-chat]").forEach(btn=>btn.onclick=()=>{
+      const id=btn.dataset.deleteChat,chat=state.chats.find(c=>c.id===id);
+      if(chat&&confirm(`Delete the entire conversation with ${chat.call}? This cannot be undone.`)){
+        state.chats=state.chats.filter(c=>c.id!==id);saveState();render();
+      }
+    });
   }
-  function appendMessage(log,m){
-    const div=document.createElement("div");div.className="message "+(m.rx?"rx":"tx");
-    div.textContent=m.text;
+  function appendMessage(log,m,index,chat){
+    const wrap=document.createElement("div");wrap.className="message-wrap "+(m.rx?"rx":"tx");
+    const div=document.createElement("div");div.className="message "+(m.rx?"rx":"tx");div.textContent=m.text;
     const meta=document.createElement("div");meta.className="message-meta";meta.textContent=(m.rx?"RX":"TX")+" · "+m.time;
-    div.appendChild(meta);log.appendChild(div);
+    div.appendChild(meta);wrap.appendChild(div);
+    const actions=document.createElement("div");actions.className="message-actions";
+    const del=document.createElement("button");del.textContent="Delete message";
+    del.onclick=()=>{if(confirm("Delete this message? This cannot be undone.")){chat.msgs.splice(index,1);saveState();render();}};
+    actions.appendChild(del);wrap.appendChild(actions);log.appendChild(wrap);
   }
   function sendToChat(chat,text){
     text=text.trim();if(!text)return alert("Enter a message first.");
@@ -165,9 +199,10 @@
     $("#addQuick").onclick=()=>{const q=$("#customQuick").value.trim();if(!q)return;state.quick.push(q);saveState();renderQuick();};
   }
   function renderSettings(){
-    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.2 · UI prototype. Audio modem, radio integration, and true over-the-air messaging are not yet implemented.</div></div><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
-    $("#saveCall").onclick=()=>{const c=$("#callsign").value.trim().toUpperCase();if(!c)return alert("Enter a callsign.");state.callsign=c;saveState();render();setStatus("CALLSIGN SAVED");};
-    $("#resetDemo").onclick=()=>{if(confirm("Reset local Field Text demo data and callsign?")){localStorage.removeItem(storageKey);state=structuredClone(defaultState);render();setStatus("DEMO DATA RESET");}};
+    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.3 · UI prototype. Audio modem, radio integration, and true over-the-air messaging are not yet implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
+    $("#saveCall").onclick=()=>{const c=$("#callsign").value.trim().toUpperCase();if(!c)return alert("Enter a callsign.");state.callsign=c;state.loggedIn=true;saveState();render();setStatus("CALLSIGN SAVED");};
+    $("#logout").onclick=()=>{state.loggedIn=false;saveState();render();};
+    $("#resetDemo").onclick=()=>{if(confirm("Reset local Field Text demo data, callsign and login?")){localStorage.removeItem(storageKey);state=structuredClone(defaultState);render();setStatus("DEMO DATA RESET");}};
   }
   document.querySelectorAll(".nav-button").forEach(b=>b.onclick=()=>{page=b.dataset.page;selectedChat=null;render();});
   render();
