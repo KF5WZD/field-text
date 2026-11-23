@@ -1,0 +1,17 @@
+{
+  "name": "Field Text",
+  "short_name": "Field Text",
+  "description": "Offline-first amateur radio messaging prototype",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b1218",
+  "theme_color": "#101a22",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
