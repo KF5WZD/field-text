@@ -113,7 +113,7 @@
     if(selectedChat){
       const chat=state.chats.find(c=>c.id===selectedChat);
       if(!chat){selectedChat=null;return renderMessages();}
-      main.innerHTML=`<button class="ghost small" id="backInbox">← Inbox</button><h2 style="margin-top:13px">Conversation · ${escapeHtml(chat.call)}</h2>${audioRxPanelMarkup()}<div class="conversation-actions"><button class="delete-btn small" id="clearConversation">Delete Conversation</button></div><div id="chatLog"></div><label for="reply">Message</label><textarea id="reply" maxlength="170" placeholder="Type a message…"></textarea><div class="tiny" id="replyCount">0 / 170 characters</div><button class="primary" id="sendReply" style="width:100%;margin-top:10px">Transmit Message</button>`;
+      main.innerHTML=`<button class="ghost small" id="backInbox">← Inbox</button><h2 style="margin-top:13px">Conversation · ${escapeHtml(chat.call)}</h2>${chat.msgs.some(m=>m.rx&&m.ackNeeded)?`<div class="card ack-card"><b>Delivery acknowledgment requested</b><div class="note">Send a short acknowledgment to ${escapeHtml(chat.call)} confirming receipt.</div><button class="primary" id="sendAck" style="width:100%;margin-top:8px">Send Delivery ACK</button></div>`:''}${audioRxPanelMarkup()}<div class="conversation-actions"><button class="delete-btn small" id="clearConversation">Delete Conversation</button></div><div id="chatLog"></div><label for="reply">Message</label><textarea id="reply" maxlength="170" placeholder="Type a message…"></textarea><div class="tiny" id="replyCount">0 / 170 characters</div><button class="primary" id="sendReply" style="width:100%;margin-top:10px">Transmit Message</button>`;
       $("#backInbox").onclick=()=>{selectedChat=null;render();};
       bindAudioRxPanel();
       const log=$("#chatLog");
@@ -125,6 +125,7 @@
       };
       $("#reply").oninput=e=>$("#replyCount").textContent=`${e.target.value.length} / 170 characters`;
       $("#sendReply").onclick=()=>sendToChat(chat,$("#reply").value);
+      const ackBtn=$("#sendAck");if(ackBtn)ackBtn.onclick=()=>sendAcknowledgment(chat);
       return;
     }
     main.innerHTML=`<h2>Messages</h2>${audioRxPanelMarkup()}<button class="primary compose-button" id="newMessage">＋ Compose Message</button>${state.chats.length?state.chats.map(c=>{
@@ -160,7 +161,7 @@
   function appendMessage(log,m,index,chat){
     const wrap=document.createElement("div");wrap.className="message-wrap "+(m.rx?"rx":"tx");
     const div=document.createElement("div");div.className="message "+(m.rx?"rx":"tx");div.textContent=m.text;
-    const meta=document.createElement("div");meta.className="message-meta";meta.textContent=(m.rx?"RX":"TX")+" · "+m.time;
+    const meta=document.createElement("div");meta.className="message-meta";meta.textContent=(m.rx?"RX":"TX")+" · "+m.time+(m.rx?"":m.txState==="delivered"?" · DELIVERED":m.txState==="sent"?" · SENT (NO ACK)":m.txState==="failed"?" · TX FAILED":m.txState==="transmitting"?" · TRANSMITTING":"");
     div.appendChild(meta);wrap.appendChild(div);
     const actions=document.createElement("div");actions.className="message-actions";
     const del=document.createElement("button");del.textContent="Delete message";
@@ -169,9 +170,18 @@
   }
   function sendToChat(chat,text){
     text=text.trim();if(!text)return alert("Enter a message first.");
-    const packet={from:state.callsign,to:chat.call,text};
-    chat.msgs.push({text,rx:false,time:timeNow(),txState:"queued"});saveState();
-    render(); transmitPacket(packet).then(ok=>{if(!ok)setStatus("TX FAILED");});
+    const messageId=(crypto.randomUUID?.()||String(Date.now())+"-"+Math.random().toString(16).slice(2));
+    const packet={type:"message",id:messageId,from:state.callsign,to:chat.call,text};
+    chat.msgs.push({id:messageId,text,rx:false,time:timeNow(),txState:"transmitting"});saveState();
+    render(); transmitPacket(packet).then(ok=>{const m=chat.msgs.find(x=>x.id===messageId);if(m){m.txState=ok?"sent":"failed";saveState();}if(!ok)setStatus("TX FAILED");if(page==="messages"&&selectedChat===chat.id)renderMessages();});
+  }
+  function sendAcknowledgment(chat){
+    const pending=chat.msgs.filter(m=>m.rx&&m.ackNeeded);
+    if(!pending.length)return;
+    const latest=pending[pending.length-1];
+    const packet={type:"ack",messageId:latest.id,from:state.callsign,to:chat.call,text:"DELIVERED"};
+    latest.ackNeeded=false;latest.ackSent=true;saveState();renderMessages();
+    transmitPacket(packet).then(ok=>{setStatus(ok?"ACK TRANSMITTED":"ACK TX FAILED");});
   }
   function crc16(bytes){
     let crc=0xFFFF;
@@ -224,7 +234,7 @@
     }catch(err){setStatus("AUDIO ERROR");alert("Audio test failed: "+err.message);}
   }
   function compose(prefill=""){
-    main.innerHTML=`<button class="ghost small" id="cancelCompose">← Back</button><h2 style="margin-top:13px">Compose Message</h2><label for="recipient">Recipient Callsign</label><input id="recipient" maxlength="16" placeholder="e.g. W4XYZ"><label for="messageBody">Message</label><textarea id="messageBody" maxlength="170" placeholder="Write message…">${escapeHtml(prefill)}</textarea><div class="tiny" id="count">0 / 170 characters</div><button class="primary" id="transmit" style="width:100%;margin-top:10px">Transmit</button><div class="card" style="margin-top:12px"><div class="tiny">PROTOTYPE NOTE</div><div class="preview">Audio is generated by your browser and sent to its selected audio output. No radio PTT control or receive decoder is included yet.</div></div>`;
+    main.innerHTML=`<button class="ghost small" id="cancelCompose">← Back</button><h2 style="margin-top:13px">Compose Message</h2><label for="recipient">Recipient Callsign</label><input id="recipient" list="favoriteRecipientList" maxlength="16" placeholder="e.g. W4XYZ"><datalist id="favoriteRecipientList">${(state.contacts||[]).map(c=>`<option value="${escapeHtml(c.call)}">${escapeHtml(c.name||c.call)}</option>`).join("")}</datalist><label for="messageBody">Message</label><textarea id="messageBody" maxlength="170" placeholder="Write message…">${escapeHtml(prefill)}</textarea><div class="tiny" id="count">0 / 170 characters</div><button class="primary" id="transmit" style="width:100%;margin-top:10px">Transmit</button><div class="card" style="margin-top:12px"><div class="tiny">PROTOTYPE NOTE</div><div class="preview">Packets include a public recipient callsign. Only the addressed Field Text station saves the message. Delivery is confirmed only when that station sends an ACK.</div></div>`;
     $("#cancelCompose").onclick=render;
     $("#messageBody").oninput=e=>$("#count").textContent=`${e.target.value.length} / 170 characters`;
     $("#transmit").onclick=()=>{
@@ -232,8 +242,9 @@
       if(!to||!text)return alert("Enter a recipient callsign and message.");
       let chat=state.chats.find(c=>c.call===to);
       if(!chat){chat={id:crypto.randomUUID?.()||String(Date.now()),call:to,msgs:[]};state.chats.unshift(chat);}
-      chat.msgs.push({text,rx:false,time:timeNow(),txState:"queued"});saveState();selectedChat=chat.id;
-      const txPromise=transmitPacket({from:state.callsign,to:to,text});render();txPromise.then(ok=>{if(!ok)setStatus("TX FAILED");});
+      const messageId=(crypto.randomUUID?.()||String(Date.now())+"-"+Math.random().toString(16).slice(2));
+      chat.msgs.push({id:messageId,text,rx:false,time:timeNow(),txState:"transmitting"});saveState();selectedChat=chat.id;
+      const txPromise=transmitPacket({type:"message",id:messageId,from:state.callsign,to:to,text});render();txPromise.then(ok=>{const m=chat.msgs.find(x=>x.id===messageId);if(m){m.txState=ok?"sent":"failed";saveState();}if(!ok)setStatus("TX FAILED");if(page==="messages"&&selectedChat===chat.id)renderMessages();});
     };
   }
   // Experimental RX: microphone capture, 10ms 2-FSK detection, UART framing and packet/CRC parsing.
@@ -241,7 +252,30 @@
   function goertzelPower(samples,freq,sr){const coeff=2*Math.cos(2*Math.PI*freq/sr);let s0=0,s1=0,s2=0;for(let i=0;i<samples.length;i++){const w=0.5-0.5*Math.cos(2*Math.PI*i/(samples.length-1));s0=samples[i]*w+coeff*s1-s2;s2=s1;s1=s0;}return s1*s1+s2*s2-coeff*s1*s2;}
   function rxProcessWindow(samples,sr){let rms=0;for(const x of samples)rms+=x*x;rms=Math.sqrt(rms/samples.length);const p0=goertzelPower(samples,1200,sr),p1=goertzelPower(samples,1800,sr),conf=Math.abs(p1-p0)/(p0+p1||1);const meter=$('#rxMeterFill');if(meter)meter.style.width=Math.min(100,Math.round(rms*900))+'%';const lvl=$('#rxLevelText');if(lvl)lvl.textContent=`Audio level ${(rms*100).toFixed(1)}% · ${conf>.18?'tone detected':'listening'}`;if(rms>.006){rxBits.push({bit:p1>p0?1:0,conf});if(rxBits.length>24000)rxBits=rxBits.slice(-12000);rxTryDecode();}}
   function rxTryDecode(){for(let phase=0;phase<2;phase++){const symbols=[];for(let i=phase;i+1<rxBits.length;i+=2){const a=rxBits[i],b=rxBits[i+1];symbols.push(a.bit===b.bit?a.bit:(a.conf>=b.conf?a.bit:b.bit));}for(let offset=0;offset<10;offset++){const raw=[];for(let i=offset;i+9<symbols.length;i+=10){if(symbols[i]!==0||symbols[i+9]!==1)continue;let byte=0;for(let k=0;k<8;k++)byte|=symbols[i+1+k]<<k;raw.push(byte);}for(let j=0;j+5<raw.length;j++){if(raw[j]!==0xD3||raw[j+1]!==0x91)continue;const len=(raw[j+2]<<8)|raw[j+3];if(len>240||j+4+len+2>raw.length)continue;const payload=raw.slice(j+4,j+4+len),crc=raw[j+4+len]|raw[j+5+len]<<8;if(crc16(raw.slice(j,j+4+len))!==crc)continue;try{const packet=JSON.parse(new TextDecoder().decode(new Uint8Array(payload)));rxHandlePacket(packet);rxBits=[];return; }catch{}}}}}
-  function rxHandlePacket(packet){if(!packet||typeof packet.text!=='string'||typeof packet.from!=='string')return;const from=packet.from.toUpperCase(),to=(packet.to||'').toUpperCase();if(to&&state.callsign&&to!==state.callsign.toUpperCase()&&to!=='TEST'&&to!=='ALL')return;let chat=state.chats.find(c=>c.call===from);if(!chat){chat={id:crypto.randomUUID?.()||String(Date.now()),call:from,msgs:[]};state.chats.unshift(chat);}if(chat.msgs.some(m=>m.rx&&m.text===packet.text&&m.from===from&&m.rxPacketAt&&Date.now()-m.rxPacketAt<60000))return;chat.msgs.push({text:packet.text,rx:true,time:timeNow(),from,rxPacketAt:Date.now()});saveState();rxLastDecoded={from,to,text:packet.text};setStatus(`RX MESSAGE · ${from}`);if(page==='messages')renderMessages();updateRxControls();}
+  function rxHandlePacket(packet){
+    if(!packet||typeof packet.from!=="string")return;
+    const from=packet.from.trim().toUpperCase(),to=(packet.to||"").trim().toUpperCase();
+    if(!from||from===state.callsign.toUpperCase())return;
+    // Recipient callsigns are public routing labels, not encryption.
+    if(to!=="ALL"&&to!==state.callsign.toUpperCase())return;
+    if(packet.type==="ack"){
+      const chat=state.chats.find(c=>c.call===from);
+      if(chat){
+        const msg=chat.msgs.find(m=>m.id===packet.messageId&&!m.rx);
+        if(msg){msg.txState="delivered";msg.ackAt=Date.now();saveState();setStatus(`DELIVERY ACK · ${from}`);if(page==="messages")renderMessages();}
+      }
+      return;
+    }
+    if(packet.type==="test" || (packet.type && packet.type!=="message"))return;
+    if(typeof packet.text!=="string"||!packet.text)return;
+    let chat=state.chats.find(c=>c.call===from);
+    if(!chat){chat={id:crypto.randomUUID?.()||String(Date.now()),call:from,msgs:[]};state.chats.unshift(chat);}
+    if(chat.msgs.some(m=>m.rx&&m.id&&m.id===packet.id))return;
+    if(chat.msgs.some(m=>m.rx&&m.text===packet.text&&m.from===from&&m.rxPacketAt&&Date.now()-m.rxPacketAt<60000))return;
+    chat.msgs.push({id:packet.id||("rx-"+Date.now()),text:packet.text,rx:true,time:timeNow(),from,rxPacketAt:Date.now(),ackNeeded:!!packet.id});
+    saveState();rxLastDecoded={from,to,text:packet.text};setStatus(`RX MESSAGE · ${from}`);
+    if(page==="messages")renderMessages();updateRxControls();
+  }
   async function startReceive(){if(rxActive)return;if(!navigator.mediaDevices?.getUserMedia){alert('Microphone access requires HTTPS/localhost and a supported browser.');return;}try{rxStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error('Web Audio unsupported');audioCtx=audioCtx||new AC();await audioCtx.resume();const src=audioCtx.createMediaStreamSource(rxStream);rxProcessor=audioCtx.createScriptProcessor(256,1,1);rxWindowSize=Math.round(audioCtx.sampleRate*.005);rxBuffer=[];rxBits=[];rxActive=true;rxProcessor.onaudioprocess=e=>{if(!rxActive)return;const input=e.inputBuffer.getChannelData(0);for(let i=0;i<input.length;i++)rxBuffer.push(input[i]);while(rxBuffer.length>=rxWindowSize){const win=rxBuffer.splice(0,rxWindowSize);rxProcessWindow(win,audioCtx.sampleRate);}};src.connect(rxProcessor);rxProcessor.connect(audioCtx.destination);updateRxControls();setStatus('RX LISTENING · MICROPHONE');}catch(err){stopReceive();setStatus('RX ERROR');alert('Could not start microphone: '+err.message);}}
   function stopReceive(){rxActive=false;try{rxProcessor?.disconnect();}catch{}rxProcessor=null;if(rxStream){rxStream.getTracks().forEach(t=>t.stop());rxStream=null;}updateRxControls();setStatus('READY · AUDIO MODEM');}
 
@@ -251,7 +285,7 @@
     if(radioTab==="console"){
       $("#radioBody").innerHTML=`<div class="card"><div class="flex"><b>Audio Modem</b><span class="pill">TX + RX EXPERIMENTAL</span></div><div style="font-size:23px;font-weight:900;margin:14px 0">2-FSK · 100 baud</div><div class="note">1200 Hz = bit 0 · 1800 Hz = bit 1 · UART-framed bytes · sync + payload length + CRC-16.</div><label for="txLevel">Audio output level</label><input id="txLevel" type="range" min="0.05" max="0.8" step="0.05" value="${txLevel}"><div class="tiny">Start low. Avoid overdriving your radio audio input.</div><div class="button-row" style="margin-top:12px"><button id="tone0">Test 1200 Hz</button><button id="tone1">Test 1800 Hz</button></div><button class="primary" id="testPacket" style="width:100%;margin-top:9px">Transmit Test Packet</button></div><div class="card"><div class="flex"><b>Receive / Decode</b><span class="pill">MICROPHONE</span></div><div class="note">Grant microphone access. For radio reception, place this phone near your radio speaker. The microphone listens for 1200/1800 Hz Field Text tones; no cable is needed. Keep TX audio muted while receiving to avoid feedback.</div><div class="button-row" style="margin-top:10px"><button class="primary" id="rxStart">Start RX</button><button class="delete-btn hidden" id="rxStop">Stop RX</button></div><div id="rxStatus" class="tiny" style="margin-top:8px">Receiver stopped.</div><div class="signal-bar"><div class="signal-fill" id="rxMeterFill" style="width:0%"></div></div><div class="tiny" id="rxLevelText">Audio level 0.0% · idle</div><div id="rxDecoded" style="margin-top:10px"></div></div><div class="warning"><b>Radio testing:</b> manual PTT only. Experimental modem, not optimized for RF. Start with a dummy load or shielded/local setup; verify frequency, mode, privileges and listen before transmitting.</div><div class="card" style="margin-top:12px"><b>Frequency Guide</b><div class="note">Common activity and band-plan references across HF, VHF, UHF and SHF.</div><button class="primary" id="openGuide" style="width:100%;margin-top:10px">Open Frequency Guide</button></div>`;
       $("#txLevel").oninput=e=>{txLevel=Number(e.target.value);};
-      $("#tone0").onclick=()=>testTone(1200);$("#tone1").onclick=()=>testTone(1800);$("#testPacket").onclick=()=>transmitPacket({from:state.callsign||"NOCALL",to:"TEST",text:"FIELD TEXT MODEM TEST"});
+      $("#tone0").onclick=()=>testTone(1200);$("#tone1").onclick=()=>testTone(1800);$("#testPacket").onclick=()=>transmitPacket({type:"test",from:state.callsign||"NOCALL",to:"ALL",text:"FIELD TEXT MODEM TEST"});
       $("#rxStart").onclick=startReceive;$("#rxStop").onclick=stopReceive;updateRxControls();
       $("#openGuide").onclick=()=>{radioTab="guide";renderRadio();};
     }else renderGuide();
@@ -296,7 +330,7 @@
     $("#addQuick").onclick=()=>{const q=$("#customQuick").value.trim();if(!q)return;state.quick.push(q);saveState();renderQuick();};
   }
   function renderSettings(){
-    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.5.3 · Experimental acoustic 2-FSK TX/RX. Radio PTT integration is not implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
+    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.6 · Directed messages, recipient filtering and manual delivery acknowledgments over experimental acoustic 2-FSK. No encryption or radio PTT control.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
     $("#saveCall").onclick=()=>{const c=$("#callsign").value.trim().toUpperCase();if(!c)return alert("Enter a callsign.");state.callsign=c;state.loggedIn=true;saveState();render();setStatus("CALLSIGN SAVED");};
     $("#logout").onclick=()=>{state.loggedIn=false;saveState();render();};
     $("#resetDemo").onclick=()=>{if(confirm("Reset local Field Text demo data, callsign and login?")){localStorage.removeItem(storageKey);state=structuredClone(defaultState);render();setStatus("DEMO DATA RESET");}};
