@@ -96,3 +96,8 @@ textarea{min-height:105px;resize:vertical}
 .audio-rx-toggle .flex{margin-bottom:5px}
 .audio-rx-controls{padding-top:10px}
 .audio-rx-card .signal-bar{margin:12px 0 8px}
+
+/* v0.5.3 favorite contacts */
+.contact-actions{margin-top:12px}
+.contact-actions button{min-width:0}
+@media(max-width:430px){.bottom-nav .nav-button{font-size:10px}.bottom-nav .nav-button span{font-size:16px}.contact-actions{gap:5px}.contact-actions button{padding:8px 6px;font-size:11px}}

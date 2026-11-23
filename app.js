@@ -1,4 +1,4 @@
-/* Field Text v0.4 — first audible 2-FSK TX prototype. RX is not implemented yet. */
+/* Field Text v0.5.3 — favorite contacts */
 (() => {
   const $ = (s, root=document) => root.querySelector(s);
   const main = $("#main");
@@ -8,6 +8,7 @@
     callsign: "",
     loggedIn: false,
     quick: ["I am OK.","Need assistance.","At my location.","Returning to base.","Message received.","Radio check.","Battery low.","Will call again shortly."],
+    contacts: [],
     chats: [
       {id:"demo-w4xyz", call:"W4XYZ", msgs:[
         {text:"Copy your signal. How is your setup working?",rx:true,time:"20:42"},
@@ -106,6 +107,7 @@
     if(page==="radio") renderRadio();
     if(page==="quick") renderQuick();
     if(page==="settings") renderSettings();
+    if(page==="contacts") renderContacts();
   }
   function renderMessages(){
     if(selectedChat){
@@ -275,13 +277,26 @@
   function fallbackCopy(text){
     const input=document.createElement("textarea");input.value=text;input.style.position="fixed";input.style.opacity="0";document.body.appendChild(input);input.select();try{document.execCommand("copy");}catch{}input.remove();
   }
+  function openContact(call){
+    let chat=state.chats.find(c=>c.call===call);
+    if(!chat){chat={id:crypto.randomUUID?.()||String(Date.now()),call,msgs:[]};state.chats.unshift(chat);saveState();}
+    selectedChat=chat.id;page="messages";render();
+  }
+  function renderContacts(){
+    const contacts=Array.isArray(state.contacts)?state.contacts:[];
+    main.innerHTML=`<h2>Favorite Contacts</h2><div class="subheading">Save up to 5 callsigns for quick access to conversations.</div>${contacts.length?contacts.map((c,i)=>`<article class="card contact-card"><div class="flex"><div><div class="call">${escapeHtml(c.call)}</div>${c.name?`<div class="preview">${escapeHtml(c.name)}</div>`:''}</div><span class="pill">FAVORITE ${i+1}</span></div><div class="button-row contact-actions"><button class="primary" data-contact-open="${i}">Messages</button><button class="ghost small" data-contact-edit="${i}">Edit</button><button class="delete-btn small" data-contact-delete="${i}">Remove</button></div></article>`).join(''):`<div class="empty">No favorite contacts saved yet.</div>`}${contacts.length<5?`<div class="card"><h3>Add Favorite</h3><label for="contactCall">Callsign</label><input id="contactCall" maxlength="16" placeholder="e.g. W4XYZ"><label for="contactName">Name or nickname (optional)</label><input id="contactName" maxlength="32" placeholder="e.g. Bob"><button class="primary" id="saveContact" style="width:100%">Save Contact</button></div>`:`<div class="note">You have reached the 5-contact limit. Remove a contact to add another.</div>`}`;
+    main.querySelectorAll('[data-contact-open]').forEach(b=>b.onclick=()=>openContact(contacts[Number(b.dataset.contactOpen)].call));
+    main.querySelectorAll('[data-contact-delete]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.contactDelete),c=contacts[i];if(confirm(`Remove ${c.call} from favorite contacts? Their conversation will not be deleted.`)){state.contacts.splice(i,1);saveState();renderContacts();}});
+    main.querySelectorAll('[data-contact-edit]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.contactEdit),c=contacts[i];const name=prompt('Contact name / nickname (leave blank to clear):',c.name||'');if(name===null)return;const call=prompt('Callsign:',c.call);if(call===null)return;const normalized=call.trim().toUpperCase();if(!normalized)return alert('Callsign cannot be blank.');if(state.contacts.some((x,j)=>j!==i&&x.call===normalized))return alert('That callsign is already saved.');state.contacts[i]={call:normalized,name:name.trim()};saveState();renderContacts();});
+    const saveBtn=$('#saveContact');if(saveBtn)saveBtn.onclick=()=>{const call=$('#contactCall').value.trim().toUpperCase(),name=$('#contactName').value.trim();if(!call)return alert('Enter a callsign.');if(contacts.some(c=>c.call===call))return alert('That callsign is already in your favorites.');if(state.contacts.length>=5)return alert('You can save up to 5 favorite contacts.');state.contacts.push({call,name});saveState();renderContacts();};
+  }
   function renderQuick(){
     main.innerHTML=`<h2>Quick Messages</h2><div class="subheading">Tap a preset to prepare it for transmission.</div>${state.quick.map((q,i)=>`<button class="quick-button" data-quick="${i}">↗ ${escapeHtml(q)}</button>`).join("")}<div class="card" style="margin-top:13px"><label for="customQuick">Add a custom preset</label><input id="customQuick" placeholder="Your quick message"><button class="primary" id="addQuick">Add preset</button></div>`;
     main.querySelectorAll("[data-quick]").forEach(b=>b.onclick=()=>compose(state.quick[Number(b.dataset.quick)]));
     $("#addQuick").onclick=()=>{const q=$("#customQuick").value.trim();if(!q)return;state.quick.push(q);saveState();renderQuick();};
   }
   function renderSettings(){
-    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.5.2 · Experimental acoustic 2-FSK TX/RX. Radio PTT integration is not implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
+    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.5.3 · Experimental acoustic 2-FSK TX/RX. Radio PTT integration is not implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
     $("#saveCall").onclick=()=>{const c=$("#callsign").value.trim().toUpperCase();if(!c)return alert("Enter a callsign.");state.callsign=c;state.loggedIn=true;saveState();render();setStatus("CALLSIGN SAVED");};
     $("#logout").onclick=()=>{state.loggedIn=false;saveState();render();};
     $("#resetDemo").onclick=()=>{if(confirm("Reset local Field Text demo data, callsign and login?")){localStorage.removeItem(storageKey);state=structuredClone(defaultState);render();setStatus("DEMO DATA RESET");}};
