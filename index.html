@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101a22">
+<meta name="description" content="Field Text — offline-first amateur radio messaging prototype">
+<title>Field Text</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div id="loginScreen" class="login-screen hidden"></div>
+<div class="app-shell" id="appShell">
+  <header class="app-header">
+    <div class="brand-block">
+      <div class="brand"><span class="brand-mark">▰</span> FIELD TEXT</div>
+      <div class="tagline">OFF-GRID DIGITAL MESSAGING</div>
+    </div>
+    <div class="callsign-badge" id="headerCallsign">N0CALL</div>
+    <div class="status-line"><span class="status-dot"></span><span id="statusText">READY · DEMO MODE</span></div>
+  </header>
+  <main id="main" class="main-content" aria-live="polite"></main>
+  <nav class="bottom-nav" aria-label="Main navigation">
+    <button data-page="messages" class="nav-button active"><span>▤</span>Messages</button>
+    <button data-page="radio" class="nav-button"><span>◉</span>Radio</button>
+    <button data-page="quick" class="nav-button"><span>⚡</span>Quick</button>
+    <button data-page="settings" class="nav-button"><span>⚙</span>Settings</button>
+  </nav>
+  <footer class="app-footer">FIELD TEXT · PROTOTYPE 0.2 · LOCAL DEMO</footer>
+</div>
+<script src="./app.js"></script>
+</body>
+</html>
