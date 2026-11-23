@@ -1,8 +1,9 @@
-/* Field Text v0.2 — local-first UI prototype. Radio transmission is simulated. */
+/* Field Text v0.4 — first audible 2-FSK TX prototype. RX is not implemented yet. */
 (() => {
   const $ = (s, root=document) => root.querySelector(s);
   const main = $("#main");
   const storageKey = "fieldtext.v02";
+  let audioCtx = null, txBusy = false, txLevel = 0.35;
   const defaultState = {
     callsign: "",
     loggedIn: false,
@@ -147,8 +148,50 @@
   }
   function sendToChat(chat,text){
     text=text.trim();if(!text)return alert("Enter a message first.");
-    chat.msgs.push({text,rx:false,time:timeNow()});saveState();setStatus("TX · SIMULATED");
-    render();window.setTimeout(()=>setStatus("READY · DEMO MODE"),900);
+    const packet={from:state.callsign,to:chat.call,text};
+    chat.msgs.push({text,rx:false,time:timeNow(),txState:"queued"});saveState();
+    render(); transmitPacket(packet).then(ok=>{if(!ok)setStatus("TX FAILED");});
+  }
+  function crc16(bytes){
+    let crc=0xFFFF;
+    for(const b of bytes){crc^=b;for(let i=0;i<8;i++)crc=(crc&1)?((crc>>>1)^0xA001):(crc>>>1);}
+    return crc&0xFFFF;
+  }
+  function packetBytes(packet){
+    const payload=new TextEncoder().encode(JSON.stringify(packet));
+    if(payload.length>240)throw new Error("Payload too large for this prototype modem.");
+    const framed=[...new Uint8Array(16).fill(0x55),0xD3,0x91,(payload.length>>8)&255,payload.length&255,...payload];
+    const crc=crc16(framed.slice(16));framed.push(crc&255,(crc>>8)&255);return framed;
+  }
+  function bitsFromBytes(bytes){
+    const bits=[];for(const b of bytes){bits.push(0);for(let i=0;i<8;i++)bits.push((b>>i)&1);bits.push(1);}return bits;
+  }
+  async function transmitPacket(packet){
+    if(txBusy){alert("The modem is already transmitting.");return false;}
+    if(!window.AudioContext&&!window.webkitAudioContext){alert("Web Audio is not supported in this browser.");return false;}
+    try{
+      txBusy=true;setStatus("TX · PREPARING AUDIO");
+      audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+      await audioCtx.resume();
+      const bytes=packetBytes(packet),bits=bitsFromBytes(bytes),baud=100,bitDur=1/baud,sr=audioCtx.sampleRate;
+      const samples=Math.ceil(bits.length*bitDur*sr),buf=audioCtx.createBuffer(1,samples,sr),data=buf.getChannelData(0);
+      let phase=0,idx=0;const f0=1200,f1=1800,edge=Math.max(1,Math.floor(sr*0.003));
+      for(const bit of bits){const freq=bit?f1:f0,n=Math.round(bitDur*sr);for(let j=0;j<n&&idx<samples;j++,idx++){
+        phase+=2*Math.PI*freq/sr;if(phase>2*Math.PI)phase-=2*Math.PI;
+        let env=1;if(j<edge)env=j/edge;else if(j>n-edge)env=(n-j)/edge;
+        data[idx]=Math.sin(phase)*env*txLevel;
+      }}
+      const source=audioCtx.createBufferSource(),gain=audioCtx.createGain();source.buffer=buf;gain.gain.value=1;source.connect(gain);gain.connect(audioCtx.destination);
+      setStatus(`TX · ${bits.length} BITS · ${Math.ceil(bits.length/baud)}s`);
+      source.onended=()=>{txBusy=false;setStatus("READY · AUDIO MODEM");};source.start();return true;
+    }catch(err){txBusy=false;setStatus("TX ERROR");alert("Audio transmission failed: "+err.message);return false;}
+  }
+  function testTone(freq=1200,duration=0.8){
+    if(txBusy)return alert("The modem is already transmitting.");
+    const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return alert("Web Audio not supported.");
+    audioCtx=audioCtx||new AC();audioCtx.resume().then(()=>{
+      const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();osc.frequency.value=freq;gain.gain.setValueAtTime(0,audioCtx.currentTime);gain.gain.linearRampToValueAtTime(txLevel,audioCtx.currentTime+0.02);gain.gain.setValueAtTime(txLevel,audioCtx.currentTime+duration-0.03);gain.gain.linearRampToValueAtTime(0,audioCtx.currentTime+duration);osc.connect(gain);gain.connect(audioCtx.destination);osc.start();osc.stop(audioCtx.currentTime+duration);setStatus(`AUDIO TEST · ${freq} Hz`);osc.onended=()=>setStatus("READY · AUDIO MODEM");
+    });
   }
   function compose(prefill=""){
     main.innerHTML=`<button class="ghost small" id="cancelCompose">← Back</button><h2 style="margin-top:13px">Compose Message</h2><label for="recipient">Recipient Callsign</label><input id="recipient" maxlength="16" placeholder="e.g. W4XYZ"><label for="messageBody">Message</label><textarea id="messageBody" maxlength="170" placeholder="Write message…">${escapeHtml(prefill)}</textarea><div class="tiny" id="count">0 / 170 characters</div><button class="primary" id="transmit" style="width:100%;margin-top:10px">Transmit</button><div class="card" style="margin-top:12px"><div class="tiny">PROTOTYPE NOTE</div><div class="preview">This version records messages locally. No radio audio is transmitted.</div></div>`;
@@ -159,16 +202,17 @@
       if(!to||!text)return alert("Enter a recipient callsign and message.");
       let chat=state.chats.find(c=>c.call===to);
       if(!chat){chat={id:crypto.randomUUID?.()||String(Date.now()),call:to,msgs:[]};state.chats.unshift(chat);}
-      chat.msgs.push({text,rx:false,time:timeNow()});saveState();selectedChat=chat.id;setStatus("TX · SIMULATED");render();window.setTimeout(()=>setStatus("READY · DEMO MODE"),900);
+      chat.msgs.push({text,rx:false,time:timeNow(),txState:"queued"});saveState();selectedChat=chat.id;render();transmitPacket({from:state.callsign,to:to,text}).then(ok=>{if(!ok)setStatus("TX FAILED");});
     };
   }
   function renderRadio(){
     main.innerHTML=`<h2>Radio</h2><div class="tabs"><button data-tab="console" class="${radioTab==="console"?"active":""}">Radio Console</button><button data-tab="guide" class="${radioTab==="guide"?"active":""}">Frequency Guide</button></div><div id="radioBody"></div>`;
     main.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{radioTab=b.dataset.tab;renderRadio();});
     if(radioTab==="console"){
-      $("#radioBody").innerHTML=`<div class="card"><div class="flex"><b>Audio Link</b><span class="pill">SIMULATED</span></div><div style="font-size:23px;font-weight:900;margin:14px 0">Modem not connected</div><div class="note">Audio transmit and receive engine is not implemented yet.</div><div class="signal-bar"><div class="signal-fill"></div></div><div class="tiny">Demonstration signal meter</div></div><div class="button-row"><button class="primary" id="testTx">▶ Test TX</button><button id="listen">◉ Listen</button></div><div class="card" style="margin-top:12px"><b>Frequency Guide</b><div class="note">Common activity and band-plan references across HF, VHF, UHF and SHF.</div><button class="primary" id="openGuide" style="width:100%;margin-top:10px">Open Frequency Guide</button></div>`;
-      $("#testTx").onclick=()=>{setStatus("TX TEST · SIMULATED");window.setTimeout(()=>setStatus("READY · DEMO MODE"),1400);};
-      $("#listen").onclick=()=>{setStatus("RX MODE · SIMULATED");window.setTimeout(()=>setStatus("READY · DEMO MODE"),2000);};
+      $("#radioBody").innerHTML=`<div class="card"><div class="flex"><b>Audio Modem</b><span class="pill">TX PROTOTYPE</span></div><div style="font-size:23px;font-weight:900;margin:14px 0">2-FSK · 100 baud</div><div class="note">First audible modem build. 1200 Hz = bit 0 · 1800 Hz = bit 1 · framed packet + CRC-16. Receive decoding is not implemented yet.</div><label for="txLevel">Audio output level</label><input id="txLevel" type="range" min="0.05" max="0.8" step="0.05" value="${txLevel}"><div class="tiny">Start low. Avoid overdriving your radio's audio input.</div><div class="button-row" style="margin-top:12px"><button id="tone0">Test 1200 Hz</button><button id="tone1">Test 1800 Hz</button></div><button class="primary" id="testPacket" style="width:100%;margin-top:9px">Transmit Test Packet</button><div class="warning" style="margin-top:12px"><b>Before transmitting over RF:</b> connect audio to your radio, verify the frequency and mode, listen first, and use manual PTT. Do not use VOX until audio levels and timing are tested. This is an experimental modem; use a dummy load or a shielded/local test setup first.</div></div><div class="card" style="margin-top:12px"><b>Frequency Guide</b><div class="note">Common activity and band-plan references across HF, VHF, UHF and SHF.</div><button class="primary" id="openGuide" style="width:100%;margin-top:10px">Open Frequency Guide</button></div>`;
+      $("#txLevel").oninput=e=>{txLevel=Number(e.target.value);};
+      $("#tone0").onclick=()=>testTone(1200);$("#tone1").onclick=()=>testTone(1800);$("#testPacket").onclick=()=>transmitPacket({from:state.callsign||"NOCALL",to:"TEST",text:"FIELD TEXT MODEM TEST"});
+      $("#listen").onclick=()=>{setStatus("RX NOT IMPLEMENTED");};
       $("#openGuide").onclick=()=>{radioTab="guide";renderRadio();};
     }else renderGuide();
   }
@@ -199,7 +243,7 @@
     $("#addQuick").onclick=()=>{const q=$("#customQuick").value.trim();if(!q)return;state.quick.push(q);saveState();renderQuick();};
   }
   function renderSettings(){
-    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.3 · UI prototype. Audio modem, radio integration, and true over-the-air messaging are not yet implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
+    main.innerHTML=`<h2>Settings</h2><div class="card"><label for="callsign">Your Callsign</label><input id="callsign" maxlength="16" value="${escapeHtml(state.callsign)}"><button class="primary" id="saveCall">Save Callsign</button></div><div class="card"><div class="flex"><b>Offline-first</b><span class="pill">LOCAL STORAGE</span></div><div class="note">Calls, messages and custom quick messages are stored in this browser on this device.</div></div><div class="card"><b>App information</b><div class="note">Field Text v0.4 · First audio TX prototype. Audio RX decoder and radio PTT integration are not implemented.</div></div><button class="ghost" id="logout" style="width:100%;margin-bottom:9px">Log Out</button><button class="ghost" id="resetDemo" style="width:100%">Reset demo data</button>`;
     $("#saveCall").onclick=()=>{const c=$("#callsign").value.trim().toUpperCase();if(!c)return alert("Enter a callsign.");state.callsign=c;state.loggedIn=true;saveState();render();setStatus("CALLSIGN SAVED");};
     $("#logout").onclick=()=>{state.loggedIn=false;saveState();render();};
     $("#resetDemo").onclick=()=>{if(confirm("Reset local Field Text demo data, callsign and login?")){localStorage.removeItem(storageKey);state=structuredClone(defaultState);render();setStatus("DEMO DATA RESET");}};
